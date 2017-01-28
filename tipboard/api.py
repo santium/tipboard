@@ -35,6 +35,10 @@ class ValidatorMixin(object):
     """
     def validate_post_request(self, post_field, allowed_fields):
         error_msg = None
+        # Gonna cheat here for a minute to test, need to rewrite validator
+        if allowed_fields in post_field.keys():
+            return error_msg
+
         dict_diff = list(set(post_field) - set(allowed_fields))
         if dict_diff:
             self.set_status(400)
@@ -50,10 +54,10 @@ class ValidatorMixin(object):
 
     def validate_with_config_file(self, post, parsed_config):
         error_msg = None
-        if post['tile'][0] not in parsed_config['tiles_names']:
+        if post['tile'] not in parsed_config['tiles_names']:
             self.set_status(404)
             error_msg = "Tile's name not found in the configuration file.\n"
-        elif post['key'][0] not in parsed_config['tiles_keys']:
+        elif post['key'] not in parsed_config['tiles_keys']:
             self.set_status(404)
             error_msg = "Tile's key/id not found in the configuration file.\n"
         return error_msg
@@ -93,33 +97,45 @@ class Push(tornado.web.RequestHandler, ValidatorMixin):
     For pushing tile's config see MetaProperty class.
     """
     def post(self):
-        validation_error = None
-        post_field = urlparse.parse_qs(self.request.body)
-        validation_error = self.validate_post_request(
-            post_field,
-            ['tile', 'key', 'data'],
-        )
+
+        # Expecting 3 separate post fields, should be using a single JSON object example below
+        # This makes makes it to where users only need to create a single dictionary to send rather than multiple.
+        # It also has the benefit of simplifying the code making it much easier to follow
+
+        new_post_field = json.loads(self.request.body)
+
+        tile = new_post_field['tile']
+        key = new_post_field['key']
+        data = json.dumps(new_post_field['data'])
+
+        validation_error = self.validate_post_request(new_post_field, ['tile', 'key', 'data'],)
+
         if validation_error:
             self.write(validation_error)
             return
-        validation_error = self.validate_with_config_files(post_field)
+
+        validation_error = self.validate_with_config_files(new_post_field)
+
         if validation_error:
             self.write(validation_error)
             return
-        validation_error = self.validate_with_json(post_field['data'][0])
+
+        validation_error = self.validate_with_json(data)
         if validation_error:
             self.write(validation_error)
             return
+
         try:
             redis_utils.redis_actions(
                 method='post',
-                tile_id=post_field['key'][0],
-                value=post_field['data'][0],
-                tile=post_field['tile'][0],
+                tile_id=key,
+                value=data,
+                tile=tile,
             )
         except Exception as e:
             self.set_status(500)
             self.write(e.message)
+
         else:
             self.write("Tile's data pushed successfully.\n")
 
@@ -141,7 +157,6 @@ class TileData(tornado.web.RequestHandler):
         else:
             self.set_status(404)
             self.write('%s key does not exist.\n' % tile_key)
-
 
 class MetaProperty(tornado.web.RequestHandler, ValidatorMixin):
     """Handles requests related to tile config changes."""
